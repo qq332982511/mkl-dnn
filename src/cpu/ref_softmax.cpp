@@ -15,10 +15,12 @@
 *******************************************************************************/
 
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 
 #include "c_types_map.hpp"
 #include "type_helpers.hpp"
+#include "mkldnn_thread.hpp"
 
 #include "ref_softmax.hpp"
 
@@ -32,12 +34,11 @@ namespace impl {
 namespace cpu {
 
 template <impl::data_type_t data_type>
-void ref_softmax_fwd_t<data_type>::execute_forward_dense() {
+void ref_softmax_fwd_t<data_type>::execute_forward_dense() const {
     auto src = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto dst = reinterpret_cast<data_t *>(this->memory(0));
 
-#   pragma omp parallel for schedule(static)
-    for (int ou = 0; ou < outer_size_; ou++) {
+    parallel_nd(outer_size_, [&](int ou) {
         const data_t *src_data = src + ou * channels_;
         data_t *dst_data = dst + ou * channels_;
         data_t scalar = 0;
@@ -47,48 +48,55 @@ void ref_softmax_fwd_t<data_type>::execute_forward_dense() {
         _exp(channels_, dst_data, dst_data);
         _sum(channels_, dst_data, &scalar);
         _scal(channels_, data_t(1)/scalar, dst_data);
-    }
+    });
 }
 
 template <impl::data_type_t data_type>
-void ref_softmax_fwd_t<data_type>::execute_forward_generic() {
+void ref_softmax_fwd_t<data_type>::execute_forward_generic() const {
     auto src = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto dst = reinterpret_cast<data_t *>(this->memory(0));
 
-    const memory_desc_wrapper data_d(conf_.src_pd());
+    data_t space_max_val = 0, space_denom_val = 0;
+    data_t *space_max = &space_max_val, *space_denom = &space_denom_val;
+    if (inner_size_ > 1) {
+        using namespace memory_tracking::names;
+        space_max = scratchpad().template get<data_t>(key_softmax_reduction);
+        space_denom = space_max + inner_size_;
+    }
+
+    const memory_desc_wrapper data_d(pd()->src_pd());
     const size_t dim = channels_ * inner_size_;
 
     for (int ou = 0; ou < outer_size_; ou++) {
-        utils::array_set(max_, 0, inner_size_);
-        utils::array_set(denom_, 0, inner_size_);
+        utils::array_set(space_max, -FLT_MAX, inner_size_);
+        utils::array_set(space_denom, 0, inner_size_);
 
         for (int c = 0; c < channels_; c++) {
             for(int in = 0; in < inner_size_; in++) {
                 size_t off = data_d.off_l(ou * dim + c * inner_size_ + in);
-                max_[in] = nstl::max(max_[in], src[off]);
+                space_max[in] = nstl::max(space_max[in], src[off]);
             }
         }
 
         for (int c = 0; c < channels_; c++) {
             for(int in = 0; in < inner_size_; in++) {
                 size_t off = data_d.off_l(ou * dim + c * inner_size_ + in);
-                denom_[in] += dst[off] = exp(src[off] - max_[in]);
+                space_denom[in] += dst[off] = exp(src[off] - space_max[in]);
             }
         }
 
         for (int c = 0; c < channels_; c++) {
             for (int in = 0; in < inner_size_; in++) {
                 size_t off = data_d.off_l(ou * dim + c * inner_size_ + in);
-                dst[off] /= denom_[in];
+                dst[off] /= space_denom[in];
             }
         }
     }
 }
 
-
 template <impl::data_type_t data_type>
 void ref_softmax_fwd_t<data_type>::_max(int n, const data_t *x,
-        data_t *max_data) {
+        data_t *max_data) const {
     max_data[0] = x[0];
     for (int c = 1; c < n; ++c)
         max_data[0] = nstl::max(max_data[0], x[c]);
@@ -96,43 +104,50 @@ void ref_softmax_fwd_t<data_type>::_max(int n, const data_t *x,
 
 template <impl::data_type_t data_type>
 void ref_softmax_fwd_t<data_type>::_sub(int n, data_t alpha, const data_t *x,
-        data_t *y) {
+        data_t *y) const {
     for (int c = 0; c < n; ++c)
         y[c] = x[c] - alpha;
 }
 
 template <impl::data_type_t data_type>
-void ref_softmax_fwd_t<data_type>::_exp(int n, const data_t *a, data_t *r) {
+void ref_softmax_fwd_t<data_type>::_exp(int n, const data_t *a,
+        data_t *r) const {
 #ifdef USE_MKL
     if (data_type == data_type::f32) {
         vsExp(n, a, r);
         return;
     }
 #endif
-#   pragma omp parallel for
-    for (int c = 0; c < n; ++c)
-        r[c] = expf(a[c]);
+    parallel_nd(n, [&](int c) { r[c] = expf(a[c]); });
 }
 
 template <impl::data_type_t data_type>
 void ref_softmax_fwd_t<data_type>::_sum(int n, const data_t *x,
-        data_t *sum_data) {
-    sum_data[0] = 0;
+        data_t *sum_data) const {
+#ifdef USE_MKL
+    // Here we are summing x's eg. e^z , which are positives
+    // so we can use BLAS ASUM
+    if (data_type == data_type::f32) {
+        sum_data[0] = cblas_sasum(n, x, 1);
+        return;
+    }
+#endif
+    data_t tsum = static_cast<data_t>(0);
+    PRAGMA_OMP_SIMD(reduction(+ : tsum))
     for (int c = 0; c < n; ++c)
-        sum_data[0] += x[c];
+        tsum += x[c];
+    sum_data[0] = tsum;
 }
 
 template <impl::data_type_t data_type>
-void ref_softmax_fwd_t<data_type>::_scal(int n, data_t alpha, data_t *x) {
+void ref_softmax_fwd_t<data_type>::_scal(int n, data_t alpha, data_t *x) const {
 #ifdef USE_MKL
     if (data_type == data_type::f32) {
         cblas_sscal(n, alpha, x, 1);
         return;
     }
 #endif
-#   pragma omp parallel for
-    for (int c = 0; c < n; ++c)
-        x[c] *= alpha;
+    parallel_nd(n, [&](int c) { x[c] *= alpha; });
 }
 
 template struct ref_softmax_fwd_t<data_type::f32>;
@@ -140,13 +155,12 @@ template struct ref_softmax_fwd_t<data_type::f32>;
 
 // NC/NCHW softmax for along final axe (1 for NC, 3 for NCHW)
 template <impl::data_type_t data_type>
-void ref_softmax_bwd_t<data_type>::execute_backward_dense() {
+void ref_softmax_bwd_t<data_type>::execute_backward_dense() const {
     auto data = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto diff_dst = reinterpret_cast<const data_t *>(this->input_memory(1));
     auto diff_src = reinterpret_cast<data_t *>(this->memory(0));
 
-#   pragma omp parallel for schedule(static)
-    for (int ou = 0; ou < outer_size_; ou++) {
+    parallel_nd(outer_size_, [&](int ou) {
         data_t sbr = 0;
         size_t off = channels_*ou;
         for (int c = 0; c < channels_; c++) {
@@ -160,20 +174,19 @@ void ref_softmax_bwd_t<data_type>::execute_backward_dense() {
           size_t loff = off + c;
           diff_src[loff] *= (diff_dst[loff] - sbr);
         }
-    }
+    });
 }
 
 template <impl::data_type_t data_type>
-void ref_softmax_bwd_t<data_type>::execute_backward_generic() {
+void ref_softmax_bwd_t<data_type>::execute_backward_generic() const {
     const size_t dim = channels_ * inner_size_;
     auto data = reinterpret_cast<const data_t *>(this->input_memory(0));
     auto diff_dst = reinterpret_cast<const data_t *>(this->input_memory(1));
     auto diff_src = reinterpret_cast<data_t *>(this->memory(0));
-    const memory_desc_wrapper diff_d(conf_.diff_src_pd());
-    const memory_desc_wrapper data_d(conf_.dst_pd());
+    const memory_desc_wrapper diff_d(pd()->diff_src_pd());
+    const memory_desc_wrapper data_d(pd()->dst_pd());
 
-#   pragma omp parallel for schedule(static)
-    for (int ou = 0; ou < outer_size_; ou++) {
+    parallel_nd(outer_size_, [&](int ou) {
         for (int in = 0; in < inner_size_; in++) {
             data_t sbr = 0;
             for (int c = 0; c < channels_; c++) {
@@ -188,7 +201,7 @@ void ref_softmax_bwd_t<data_type>::execute_backward_generic() {
               diff_src[off_diff] = data[off_data]*(diff_dst[off_diff] - sbr);
             }
         }
-    }
+    });
 }
 
 template struct ref_softmax_bwd_t<data_type::f32>;

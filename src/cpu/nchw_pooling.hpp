@@ -45,18 +45,19 @@ struct nchw_pooling_fwd_t: public cpu_primitive_t {
             using namespace prop_kind;
             using namespace alg_kind;
             assert(engine()->kind() == engine_kind::cpu);
+            auto src_format = src_pd()->desc()->format;
             bool ok = true
-                && desc()->src_desc.ndims == 4
                 && set_default_params() == status::success
                 && utils::one_of(desc()->prop_kind, forward_training,
                         forward_inference)
                 && utils::one_of(desc()->alg_kind, pooling_max,
                         pooling_avg_include_padding,
                         pooling_avg_exclude_padding)
+                && !has_zero_dim_memory()
                 && utils::everyone_is(data_type, src_pd()->desc()->data_type,
                         dst_pd()->desc()->data_type)
-                && utils::everyone_is(nchw, src_pd()->desc()->format,
-                        dst_pd()->desc()->format)
+                && utils::one_of(src_format, nchw, ncdhw)
+                && (src_format == dst_pd()->desc()->format)
                 && attr()->has_default_values();
             if (!ok) return status::unimplemented;
 
@@ -71,19 +72,19 @@ struct nchw_pooling_fwd_t: public cpu_primitive_t {
         }
     };
 
-    nchw_pooling_fwd_t(const pd_t *pd, const input_vector &inputs,
+    nchw_pooling_fwd_t(const pd_t *apd, const input_vector &inputs,
             const output_vector &outputs)
-        : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd) {}
+        : cpu_primitive_t(apd, inputs, outputs) {}
     typedef typename prec_traits<data_type>::type data_t;
 
-    virtual void execute(event_t *e) {
+    virtual void execute(event_t *e) const {
         execute_forward();
         e->set_state(event_t::ready);
     }
 
 private:
-    void execute_forward();
-    pd_t conf_;
+    void execute_forward() const;
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd(); }
 };
 
 template <impl::data_type_t data_type>
@@ -100,17 +101,19 @@ struct nchw_pooling_bwd_t: public cpu_primitive_t {
             using namespace prop_kind;
             using namespace alg_kind;
             assert(engine()->kind() == engine_kind::cpu);
+            auto diff_dst_format = diff_dst_pd()->desc()->format;
             bool ok = true
-                && desc()->diff_src_desc.ndims == 4
                 && set_default_params() == status::success
                 && utils::one_of(desc()->prop_kind, backward_data)
                 && utils::one_of(desc()->alg_kind, pooling_max,
                         pooling_avg_include_padding,
                         pooling_avg_exclude_padding)
-                && utils::everyone_is(data_type, diff_dst_pd()->desc()->data_type,
+                && !has_zero_dim_memory()
+                && utils::everyone_is(data_type,
+                        diff_dst_pd()->desc()->data_type,
                         diff_src_pd()->desc()->data_type)
-                && utils::everyone_is(nchw, diff_dst_pd()->desc()->format,
-                        diff_src_pd()->desc()->format)
+                && utils::one_of(diff_dst_format, nchw, ncdhw)
+                && (diff_dst_format == diff_src_pd()->desc()->format)
                 && attr()->has_default_values();
             if (!ok) return status::unimplemented;
 
@@ -118,8 +121,9 @@ struct nchw_pooling_bwd_t: public cpu_primitive_t {
                 bool ws_ok = true
                     && hint_fwd_pd_
                     && hint_fwd_pd_->workspace_pd()
-                    && utils::one_of(hint_fwd_pd_->workspace_pd()->desc()->format,
-                            nchw, nChw8c, nChw16c);
+                    && utils::one_of(
+                            hint_fwd_pd_->workspace_pd()->desc()->format,
+                            nchw, nChw8c, nChw16c, ncdhw, nCdhw8c, nCdhw16c);
                 if (!ws_ok) return status::unimplemented;
 
                 ws_pd_ = *(cpu_memory_t::pd_t*)hint_fwd_pd_->workspace_pd();
@@ -129,19 +133,19 @@ struct nchw_pooling_bwd_t: public cpu_primitive_t {
         }
     };
 
-    nchw_pooling_bwd_t(const pd_t *pd, const input_vector &inputs,
+    nchw_pooling_bwd_t(const pd_t *apd, const input_vector &inputs,
             const output_vector &outputs)
-        : cpu_primitive_t(&conf_, inputs, outputs), conf_(*pd) {}
+        : cpu_primitive_t(apd, inputs, outputs) {}
     typedef typename prec_traits<data_type>::type data_t;
 
-    virtual void execute(event_t *e) {
+    virtual void execute(event_t *e) const {
         execute_backward();
         e->set_state(event_t::ready);
     }
 
 private:
-    void execute_backward();
-    pd_t conf_;
+    void execute_backward() const;
+    const pd_t *pd() const { return (const pd_t *)primitive_t::pd(); }
 };
 
 }

@@ -23,7 +23,7 @@ The usage:
 ```
 where:
 
- - `HARNESS` is either `conv` [default], `ip`, `reorder`, `bnorm`, `rnn` or `self`
+ - `HARNESS` is either `conv` [default], `ip`, `shuffle`, `reorder`, `bnorm`, `rnn` or `self`
 
  - `MODE` -- string that contains flags for benchmark mode. Use `C` or `c` for correctness (used by default), and `P` or `p` for performance
 
@@ -45,9 +45,8 @@ The usage:
 where *harness-knobs* are:
 
  - `--cfg={f32, u8s8u8s32, ...}` configuration (see below), default `f32`
- - `--dir={FWD_D (forward data), FWD_B (forward data + bias), BWD_D (backward data), BWD_W (backward weights), BWD_WB (backward weights + bias)}` direction, default `FWD_B`
- - `--alg={DIRECT, WINO}` convolution algorithm, default DIRECT
- - `--merge={NONE, RELU}` merged primitive, default NONE (nothing merged)
+ - `--dir={FWD_D (forward data), FWD_B (forward data + bias),FWD_I (forward data inference), BWD_D (backward data), BWD_W (backward weights), BWD_WB (backward weights + bias)}` direction, default `FWD_B`
+ - `--alg={DIRECT, WINO, AUTO}` convolution algorithm, default DIRECT
  - `--attr="attr_str"` convolution attributes (see in the section below), default `""` (no attributes set)
  - `--mb=N` override minibatch that is specified in convolution description, default `0` (use mb specified in conv desc)
  - `--match=regex` check only convolutions that match with regex, default is `".*"`. Notice: Windows may only interpret string arguments surrounded by double quotation marks.
@@ -114,9 +113,13 @@ configurations for **benchdnn**:
 | s32     | s16      | s16      | s32      | s32s16s16s32 | optimized for processors with support of 4vnni, backward wrt data only (aka BWD_D)
 | s16     | s32      | s16      | s32      | s16s32s16s32 | optimized for processors with support of 4vnni, backward wrt weights (aka BWD_W, BWD_WB)
 | u8      | s8       | f32      | s32      | u8s8f32s32   | optimized for processors with support of avx512vl, forward pass only (aka FWD_D, FWD_B)
-| u8      | s8       | s32      | s32      | u8s8s32s32   | same notes as for u8s8s32s32
-| u8      | s8       | s8       | s32      | u8s8s8s32    | same notes as for u8s8s32s32
-| u8      | s8       | u8       | s32      | u8s8u8s32    | same notes as for u8s8s32s32
+| u8      | s8       | s32      | s32      | u8s8s32s32   | same notes as for u8s8f32s32
+| u8      | s8       | s8       | s32      | u8s8s8s32    | same notes as for u8s8f32s32
+| u8      | s8       | u8       | s32      | u8s8u8s32    | same notes as for u8s8f32s32
+| s8      | s8       | f32      | s32      | s8s8f32s32   | same notes as for u8s8f32s32
+| s8      | s8       | s32      | s32      | s8s8s32s32   | same notes as for u8s8f32s32
+| s8      | s8       | s8       | s32      | s8s8s8s32    | same notes as for u8s8f32s32
+| s8      | s8       | u8       | s32      | s8s8u8s32    | same notes as for u8s8f32s32
 
 
 ## Performance measurements
@@ -179,16 +182,16 @@ Run the set of f32 forward convolutions from inputs/conv_all file w/ bias and de
         --cfg=f32 --dir=FWD_B --batch=inputs/conv_all
 ```
 
-Run the same but with merged ReLU:
+Run the same but with post_ops ReLU:
 ```
     $ ./benchdnn --conv \
-        --cfg=f32 --dir=FWD_B --merge=RELU --batch=inputs/conv_all
+        --cfg=f32 --dir=FWD_B --attr="post_ops='relu'" --batch=inputs/conv_all
 ```
 
 Run the same as previous but also measure performance:
 ```
-    $ ./benchdnn --conv --mode=CORRnPERF \
-        --cfg=f32 --dir=FWD_B --merge=RELU --batch=inputs/conv_all
+    $ ./benchdnn --conv  --mode=CORRnPERF \
+        --cfg=f32 --dir=FWD_B --attr="post_ops='relu'" --batch=inputs/conv_all
 ```
 
 > **note**: instead of `CORRnPERF` one can use `CP`, `PC`, `cp`, or `pc`
@@ -225,7 +228,8 @@ Winograd:
     $ ./benchdnn --conv \
         --alg=DIRECT --batch=convs.in \
         --allow-unimpl=true \
-        --alg=WINO   --batch=convs.in
+        --alg=WINO   --batch=convs.in \
+        --alg=AUTO   --batch=convs.in 
 ```
 
 Run a set of u8s8u8s32 forward convolutions w/o bias, skipping
@@ -237,16 +241,6 @@ one common output scale set to 0.5 with rounding mode set to down
         --cfg=u8s8u8s32 --dir=FWD_D --skip-impl="ref" --allow-unimpl=true \
         --attr="irmode=down;oscale=common:.5" --batch=inputs/conv_all
 ```
-
-Almost the same as above (with minor changes), but also add post operation
-sequence **(relu, then sum with scale .3, then relu)** using
-attributes/mkldnn_post_ops_t:
-```
-    $ ./benchdnn --conv \
-        --cfg=u8s8s32s32 --dir=FWD_B \
-        --attr="oscale=common:.5;post_ops='relu;sum:.3;relu'" --batch=inputs/conv_all
-```
-
 
 ## Notations / Glossary / Abbreviations
 
@@ -268,7 +262,7 @@ attributes/mkldnn_post_ops_t:
 | FWD_{D,B}     | forward w/o and w/ bias
 | BWD_{D,W,WB}  | backward wrt data, weights, and weights and bias
 | DIRECT, WINO  | convolution algorithm: direct or Winograd based
-| NONE, RELU    | merged primitives: nothing or ReLU
+| AUTO          | convolution algorithm is chosen by MKL-DNN for best performance
 
 
 ## Usage (batch normalization harness)

@@ -30,6 +30,7 @@ namespace conv {
 
 alg_t str2alg(const char *str) {
 #define CASE(_alg) if (!strcasecmp(STRINGIFY(_alg), str)) return _alg
+    CASE(AUTO);
     CASE(DIRECT);
     CASE(WINO);
 #undef CASE
@@ -38,26 +39,19 @@ alg_t str2alg(const char *str) {
 }
 
 const char *alg2str(alg_t alg) {
+    if (alg == AUTO) return "auto";
     if (alg == DIRECT) return "direct";
     if (alg == WINO) return "wino";
     assert(!"unknown algorithm");
     return "unknown algorithm";
 }
 
-merge_t str2merge(const char *str) {
-#define CASE(_mrg) if (!strcasecmp(STRINGIFY(_mrg), str)) return _mrg
-    CASE(NONE);
-    CASE(RELU);
-#undef CASE
-    assert(!"unknown merge");
-    return NONE;
-}
-
-const char *merge2str(merge_t merge) {
-    if (merge == NONE) return "none";
-    if (merge == RELU) return "relu";
-    assert(!"unknown merge");
-    return "unknown merge";
+alg_t alg_kind2alg(mkldnn_alg_kind_t alg) {
+    if (alg == mkldnn_convolution_auto) return AUTO;
+    if (alg == mkldnn_convolution_direct) return DIRECT;
+    if (alg == mkldnn_convolution_winograd) return WINO;
+    assert(!"unknown algorithm");
+    return DIRECT;
 }
 
 int str2desc(desc_t *desc, const char *str, bool is_deconv) {
@@ -108,6 +102,7 @@ int str2desc(desc_t *desc, const char *str, bool is_deconv) {
 #   undef CASE_N
 
     if (d.ic == 0 || d.oc == 0) return FAIL;
+    if (d.sd <= 0 || d.sh <= 0 || d.sw <= 0) return FAIL;
 
     auto compute_out = [](bool is_deconv, int i, int k, int s, int p, int d) {
         if (is_deconv)
@@ -165,12 +160,12 @@ int str2desc(desc_t *desc, const char *str, bool is_deconv) {
         d.sw = d.sh;
         d.dw = d.dh;
     } else if (no_h) {
-        d.ih = d.iw;
-        d.kh = d.kw;
-        d.oh = d.ow;
-        d.ph = d.pw;
-        d.sh = d.sw;
-        d.dh = d.dw;
+        d.ih = 1;
+        d.kh = 1;
+        d.oh = 1;
+        d.ph = 0;
+        d.sh = 1;
+        d.dh = 0;
     }
     if (d.id<1) {d.id = 1; d.kd = 1; d.od = 1; d.sd = 1; d.pd = 0; d.dd = 0;}
 
@@ -277,25 +272,23 @@ void prb_t::generate_oscales() {
 
 void prb2str(const prb_t *p, char *buffer, bool canonical) {
     char desc_buf[max_desc_len], attr_buf[max_attr_len];
-    char dir_str[32] = {0}, cfg_str[32] = {0}, alg_str[32] = {0},
-         merge_str[32] = {0};
+    char dir_str[32] = {0}, cfg_str[32] = {0}, alg_str[32] = {0};
     desc2str(p, desc_buf, canonical);
     snprintf(dir_str, sizeof(dir_str), "--dir=%s ", dir2str(p->dir));
     snprintf(cfg_str, sizeof(cfg_str), "--cfg=%s ", cfg2str(p->cfg));
     snprintf(alg_str, sizeof(alg_str), "--alg=%s ", alg2str(p->alg));
-    snprintf(merge_str, sizeof(merge_str), "--merge=%s ", merge2str(p->merge));
     bool is_attr_def = p->attr.is_def();
     if (!is_attr_def) {
         int len = snprintf(attr_buf, max_attr_len, "--attr=\"");
+        SAFE_V(len >= 0 ? OK : FAIL);
         attr2str(&p->attr, attr_buf + len);
         len = (int)strnlen(attr_buf, max_attr_len);
         snprintf(attr_buf + len, max_attr_len - len, "\" ");
     }
-    snprintf(buffer, max_prb_len, "%s%s%s%s%s%s",
+    snprintf(buffer, max_prb_len, "%s%s%s%s%s",
             p->dir == FWD_B ? "" : dir_str,
             p->cfg == conf_f32 ? "" : cfg_str,
             p->alg == DIRECT ? "" : alg_str,
-            p->merge == NONE ? "" : merge_str,
             is_attr_def ? "" : attr_buf,
             desc_buf);
 }

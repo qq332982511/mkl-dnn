@@ -18,10 +18,12 @@
 #define JIT_AVX512_COMMON_CONV_KERNEL_F32_HPP
 
 #include "c_types_map.hpp"
-#include "cpu_memory.hpp"
+#include "memory_tracking.hpp"
 
+#include "cpu_memory.hpp"
 #include "jit_generator.hpp"
 #include "jit_primitive_conf.hpp"
+#include "jit_uni_eltwise.hpp"
 
 namespace mkldnn {
 namespace impl {
@@ -30,10 +32,19 @@ namespace cpu {
 struct jit_avx512_common_conv_fwd_kernel : public jit_generator {
 
     jit_avx512_common_conv_fwd_kernel(jit_conv_conf_t ajcp,
-            const primitive_attr_t &attr) : jcp(ajcp), attr_(attr)
+            const primitive_attr_t &attr)
+        : jcp(ajcp), attr_(attr), eltwise_injector_(nullptr)
     {
+        if (jcp.with_eltwise)
+            eltwise_injector_ = new jit_uni_eltwise_injector_f32<avx512_common>(
+                    this, jcp.eltwise);
+
         generate();
         jit_ker = (void (*)(jit_conv_call_s *))getCode();
+    }
+
+    ~jit_avx512_common_conv_fwd_kernel() {
+        delete eltwise_injector_;
     }
 
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_avx512_common_conv_fwd_kernel)
@@ -47,9 +58,9 @@ struct jit_avx512_common_conv_fwd_kernel : public jit_generator {
             cpu_memory_t::pd_t &dst_pd,
             cpu_memory_t::pd_t &bias_pd,
             const primitive_attr_t &attr,
-            int nthreads,
-            bool with_relu,
-            float relu_negative_slope);
+            int nthreads);
+    static void init_scratchpad(memory_tracking::registrar_t &scratchpad,
+            const jit_conv_conf_t &jcp);
 
     jit_conv_conf_t jcp;
     const primitive_attr_t &attr_;
@@ -70,6 +81,7 @@ private:
     reg64_t reg_inp_prf = r11;
     reg64_t reg_ker_prf = r12;
     reg64_t reg_out_prf = r13;
+    reg64_t reg_owb = r12;
 
     reg64_t aux_reg_inp = r14;
     reg64_t aux_reg_ker = r15;
@@ -105,6 +117,9 @@ private:
     reg64_t aux1_reg_inp = rbx;
     reg64_t aux_reg_out = abi_not_param1;
 
+    reg64_t reg_long_offt = r11;
+    reg64_t reg_out_long_offt = r14;
+
     inline Xbyak::Zmm zmm_ker(int i_ic) {
         assert(i_ic < 4);
         return Xbyak::Zmm(ker_reg_base_idx + i_ic);
@@ -123,10 +138,9 @@ private:
     }
 
     Xbyak::Reg64 imm_addr64 = r15;
-    Xbyak::Xmm xmm_relu_ns = Xbyak::Xmm(30);
-    Xbyak::Zmm zmm_relu_ns = Xbyak::Zmm(30);
-    Xbyak::Zmm zmm_zero = Xbyak::Zmm(31);
     Xbyak::Zmm zmm_wei = Xbyak::Zmm(31);
+
+    jit_uni_eltwise_injector_f32<avx512_common> *eltwise_injector_;
 
     inline void prepare_output(int ur_w);
     inline void store_output(int ur_w);
@@ -139,48 +153,32 @@ private:
 
     void generate();
 
-    inline void vpXdpwssd(Xbyak::Zmm zmm1, Xbyak::Zmm zmm2, reg64_t reg,
-        int offset) {
+    inline void vpXdpwssd(Xbyak::Zmm zmm1, Xbyak::Zmm zmm2,
+        const Xbyak::Address& op) {
         if (jcp.ver == ver_4vnni)
-            vp4dpwssd(zmm1, zmm2, EVEX_compress_addr(reg, offset, false));
+            vp4dpwssd(zmm1, zmm2, op);
         else
-            vpdpwssd(zmm1, zmm2, EVEX_compress_addr(reg, offset, true));
+            vpdpwssd(zmm1, zmm2, op);
     }
 
-    inline void vadd(Xbyak::Zmm zmm, reg64_t reg, int offset) {
+    inline void vadd(Xbyak::Zmm zmm, const Xbyak::Operand& op) {
         if (jcp.ver == ver_4vnni || jcp.ver == ver_vnni)
-            vpaddd(zmm, zmm, EVEX_compress_addr(reg, offset));
+            vpaddd(zmm, zmm, op);
         else
-            vaddps(zmm, zmm, EVEX_compress_addr(reg, offset));
+            vaddps(zmm, zmm, op);
     }
 
-    inline void vcmp(Xbyak::Opmask kmask,
-        Xbyak::Zmm zmm_src1, Xbyak::Zmm zmm_src2, const unsigned char cmp) {
-        if (jcp.ver == ver_4vnni || jcp.ver == ver_vnni)
-            vpcmpd(kmask, zmm_src1, zmm_src2, cmp);
-        else
-            vcmpps(kmask, zmm_src1, zmm_src2, cmp);
+    inline size_t get_output_offset(int oi, int n_oc_block) {
+        return (size_t)jcp.typesize_out * ((size_t)n_oc_block * jcp.oh
+            * jcp.ow * jcp.od + oi) * jcp.oc_block;
     }
 
-    inline void vmul(Xbyak::Zmm zmm_dst, Xbyak::Opmask kmask,
-                     Xbyak::Zmm zmm_src1, Xbyak::Zmm zmm_src2) {
-        if (jcp.ver == ver_4vnni || jcp.ver == ver_vnni)
-            vpmulld(zmm_dst | kmask, zmm_src1, zmm_src2);
-        else
-            vmulps(zmm_dst | kmask, zmm_src1, zmm_src2);
-    }
-
-    inline int get_output_offset(int oi, int n_oc_block) {
-        return jcp.typesize_out
-            * (n_oc_block * jcp.oh * jcp.ow * jcp.od + oi) * jcp.oc_block;
-    }
-
-    inline int get_input_offset(int ki, int ic, int oi, int pad_l) {
-        int scale = (jcp.ver == ver_4vnni || jcp.ver == ver_vnni) ? 2 : 1;
-        int iw_str = !jcp.is_1stconv ? jcp.ic_block : 1;
-        int ic_str = !jcp.is_1stconv ? 1 : jcp.iw * jcp.ih * jcp.id;
-        return jcp.typesize_in
-                * ((ki * (jcp.dilate_w + 1) + oi * jcp.stride_w - pad_l)
+    inline size_t get_input_offset(int ki, int ic, int oi, int pad_l) {
+        size_t scale = (jcp.ver == ver_4vnni || jcp.ver == ver_vnni) ? 2 : 1;
+        size_t iw_str = !jcp.is_1stconv ? jcp.ic_block : 1;
+        size_t ic_str = !jcp.is_1stconv ? 1 : (size_t)jcp.iw * jcp.ih * jcp.id;
+        return (size_t)jcp.typesize_in
+                * ((size_t)(ki * (jcp.dilate_w + 1) + oi * jcp.stride_w - pad_l)
                                   * iw_str
                           + scale * ic * ic_str);
     }
@@ -220,6 +218,8 @@ struct jit_avx512_common_conv_bwd_data_kernel_f32: public jit_generator {
             const memory_desc_wrapper &diff_src_d,
             const memory_desc_wrapper &weights_d,
             const memory_desc_wrapper &diff_dst_d);
+    static void init_scratchpad(memory_tracking::registrar_t &scratchpad,
+            const jit_conv_conf_t &jcp);
 
     jit_conv_conf_t jcp;
     void (*jit_ker)(jit_conv_call_s *);
@@ -259,6 +259,7 @@ private:
     reg64_t reg_channel = rsi;
 
     reg64_t reg_tmp = rbp;
+    reg64_t reg_long_offt = r14;
 
     inline Xbyak::Zmm zmm_ker(int i_ic) {
         assert(i_ic < 4);
@@ -281,11 +282,11 @@ private:
         else
             vpdpwssd(zmm1, zmm2, EVEX_compress_addr(reg, offset, true));
     }
-    inline void vadd(Xbyak::Zmm zmm, reg64_t reg, int offset) {
+    inline void vadd(Xbyak::Zmm zmm, const Xbyak::Operand& op) {
         if (jcp.ver == ver_4vnni || jcp.ver == ver_vnni)
-            vpaddd(zmm, zmm, EVEX_compress_addr(reg, offset));
+            vpaddd(zmm, zmm, op);
         else
-            vaddps(zmm, zmm, EVEX_compress_addr(reg, offset));
+            vaddps(zmm, zmm, op);
     }
 
     Xbyak::Zmm zmm_wei = Xbyak::Zmm(31);
@@ -301,27 +302,21 @@ private:
 
     inline int get_iw_start(int ki, int l_overflow)
     {
-        int r_pad = jcp.stride_w * (jcp.ow - 1) + jcp.kw - jcp.iw - jcp.l_pad;
-        int k_max = jcp.kw - 1 - (jcp.iw - 1 + r_pad) % jcp.stride_w
-            - l_overflow * jcp.stride_w;
-        int res = ki - k_max;
+        int res = (jcp.iw - 1 + jcp.r_pad) % jcp.stride_w
+                + l_overflow * jcp.stride_w
+                - (jcp.kw - 1 - ki) * (jcp.dilate_w + 1);
         while (res < 0)
             res += jcp.stride_w;
 
         return res;
-
     }
 
     inline int get_iw_end(int ur_w, int ki, int r_overflow)
     {
-        if (ur_w == jcp.ur_w_tail) {
-            int r_pad = nstl::min(0, jcp.stride_w * (jcp.ow - 1) + jcp.kw
-                    - jcp.iw - jcp.l_pad);
-            ur_w += r_pad;
-        }
-        int k_min = (ur_w - 1 + jcp.l_pad) % jcp.stride_w + r_overflow
-            * jcp.stride_w;
-        int res = k_min - ki;
+        if (utils::one_of(ur_w, jcp.iw, jcp.ur_w_tail))
+            ur_w += nstl::min(0, jcp.r_pad); // remove negative padding
+        int res = (ur_w - 1 + jcp.l_pad) % jcp.stride_w
+                + r_overflow * jcp.stride_w - ki * (jcp.dilate_w + 1);
         while (res < 0)
             res += jcp.stride_w;
 
@@ -344,6 +339,8 @@ struct jit_avx512_common_conv_bwd_weights_kernel_f32 : public jit_generator {
             const convolution_desc_t &cd, cpu_memory_t::pd_t &src_pd,
             cpu_memory_t::pd_t &diff_weights_pd,
             cpu_memory_t::pd_t &diff_bias_pd, cpu_memory_t::pd_t &diff_dst_pd);
+    static void init_scratchpad(memory_tracking::registrar_t &scratchpad,
+            const jit_conv_conf_t &jcp);
 
     jit_conv_conf_t jcp;
     void (*jit_ker)(jit_conv_call_s *);
@@ -364,10 +361,12 @@ private:
     reg64_t reg_oj = r15;
     reg64_t reg_ih_count = rbx;
     reg64_t reg_tmp = r14;
+    reg64_t reg_long_offt = r14;
 
     reg64_t ki = r11;
+    reg64_t reg_kd_count = r12;
     reg64_t reg_oi = r12;
-    reg64_t reg_id_count = r13;
+    reg64_t reg_d_index = r13;
     reg64_t reg_input_d = r15;
     reg64_t reg_output_d = rbx;
     reg64_t aux_reg_input = r12;
@@ -407,6 +406,9 @@ private:
     inline void compute_loop();
 
     void generate();
+
+    static void balance(const jit_conv_conf_t &j, int &nthr, int &nthr_mb,
+            int &nthr_g, int &nthr_oc_b, int &nthr_ic_b);
 };
 
 }

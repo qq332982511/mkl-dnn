@@ -60,6 +60,7 @@ namespace prop_kind {
 using alg_kind_t = mkldnn_alg_kind_t;
 namespace alg_kind {
     const alg_kind_t undef = mkldnn_alg_kind_undef;
+    const alg_kind_t convolution_auto = mkldnn_convolution_auto;
     const alg_kind_t convolution_direct = mkldnn_convolution_direct;
     const alg_kind_t convolution_winograd = mkldnn_convolution_winograd;
     const alg_kind_t deconvolution_direct = mkldnn_deconvolution_direct;
@@ -83,6 +84,7 @@ namespace alg_kind {
     const alg_kind_t vanilla_rnn = mkldnn_vanilla_rnn;
     const alg_kind_t vanilla_lstm = mkldnn_vanilla_lstm;
     const alg_kind_t vanilla_gru = mkldnn_vanilla_gru;
+    const alg_kind_t gru_linear_before_reset = mkldnn_gru_linear_before_reset;
 }
 
 using data_type_t = mkldnn_data_type_t;
@@ -108,6 +110,10 @@ namespace memory_format {
     const memory_format_t blocked = mkldnn_blocked;
     const memory_format_t x = mkldnn_x;
     const memory_format_t nc = mkldnn_nc;
+    const memory_format_t ncw = mkldnn_ncw;
+    const memory_format_t nwc = mkldnn_nwc;
+    const memory_format_t nCw8c = mkldnn_nCw8c;
+    const memory_format_t nCw16c = mkldnn_nCw16c;
     const memory_format_t nchw = mkldnn_nchw;
     const memory_format_t nhwc = mkldnn_nhwc;
     const memory_format_t chwn = mkldnn_chwn;
@@ -115,51 +121,87 @@ namespace memory_format {
     const memory_format_t nChw16c = mkldnn_nChw16c;
     const memory_format_t ncdhw = mkldnn_ncdhw;
     const memory_format_t ndhwc = mkldnn_ndhwc;
+    const memory_format_t nCdhw8c = mkldnn_nCdhw8c;
     const memory_format_t nCdhw16c = mkldnn_nCdhw16c;
     const memory_format_t oi = mkldnn_oi;
     const memory_format_t io = mkldnn_io;
+    const memory_format_t oiw = mkldnn_oiw;
+    const memory_format_t wio = mkldnn_wio;
+    const memory_format_t Owi8o = mkldnn_Owi8o;
+    const memory_format_t OIw8i8o = mkldnn_OIw8i8o;
+    const memory_format_t OIw8o8i = mkldnn_OIw8o8i;
+    const memory_format_t OIw16i16o = mkldnn_OIw16i16o;
+    const memory_format_t OIw16o16i = mkldnn_OIw16o16i;
+    const memory_format_t Oiw16o = mkldnn_Oiw16o;
+    const memory_format_t Owi16o = mkldnn_Owi16o;
+    const memory_format_t OIw8i16o2i = mkldnn_OIw8i16o2i;
+    const memory_format_t IOw16o16i = mkldnn_IOw16o16i;
+    const memory_format_t OIw8o16i2o = mkldnn_OIw8o16i2o;
     const memory_format_t oihw = mkldnn_oihw;
     const memory_format_t ihwo = mkldnn_ihwo;
     const memory_format_t hwio = mkldnn_hwio;
+    const memory_format_t iohw = mkldnn_iohw;
+    const memory_format_t hwio_s8s8 = mkldnn_hwio_s8s8;
     const memory_format_t dhwio = mkldnn_dhwio;
     const memory_format_t oidhw = mkldnn_oidhw;
+    const memory_format_t OIdhw8i8o = mkldnn_OIdhw8i8o;
+    const memory_format_t OIdhw8o8i = mkldnn_OIdhw8o8i;
+    const memory_format_t Odhwi8o = mkldnn_Odhwi8o;
     const memory_format_t OIdhw16i16o = mkldnn_OIdhw16i16o;
     const memory_format_t OIdhw16o16i = mkldnn_OIdhw16o16i;
     const memory_format_t Oidhw16o = mkldnn_Oidhw16o;
     const memory_format_t Odhwi16o = mkldnn_Odhwi16o;
     const memory_format_t oIhw8i = mkldnn_oIhw8i;
     const memory_format_t oIhw16i = mkldnn_oIhw16i;
+    const memory_format_t oIdhw8i = mkldnn_oIdhw8i;
+    const memory_format_t oIdhw16i = mkldnn_oIdhw16i;
     const memory_format_t OIhw8i8o = mkldnn_OIhw8i8o;
     const memory_format_t OIhw16i16o = mkldnn_OIhw16i16o;
     const memory_format_t OIhw4i16o4i = mkldnn_OIhw4i16o4i;
+    const memory_format_t OIhw4i16o4i_s8s8 = mkldnn_OIhw4i16o4i_s8s8;
     const memory_format_t OIhw8i16o2i = mkldnn_OIhw8i16o2i;
+    const memory_format_t OIdhw8i16o2i = mkldnn_OIdhw8i16o2i;
     const memory_format_t OIhw8o16i2o = mkldnn_OIhw8o16i2o;
     const memory_format_t OIhw8o8i = mkldnn_OIhw8o8i;
     const memory_format_t OIhw16o16i = mkldnn_OIhw16o16i;
     const memory_format_t IOhw16o16i = mkldnn_IOhw16o16i;
-    const memory_format_t Oihw8o = mkldnn_Oihw8o;
     const memory_format_t Oihw16o = mkldnn_Oihw16o;
     const memory_format_t Ohwi8o = mkldnn_Ohwi8o;
     const memory_format_t Ohwi16o = mkldnn_Ohwi16o;
-    const memory_format_t OhIw16o4i = mkldnn_OhIw16o4i;
+    const memory_format_t goiw = mkldnn_goiw;
+    const memory_format_t gOwi8o = mkldnn_gOwi8o;
+    const memory_format_t gOIw8i8o = mkldnn_gOIw8i8o;
+    const memory_format_t gOIw8o8i = mkldnn_gOIw8o8i;
+    const memory_format_t gOIw16i16o = mkldnn_gOIw16i16o;
+    const memory_format_t gOIw16o16i = mkldnn_gOIw16o16i;
+    const memory_format_t gOiw16o = mkldnn_gOiw16o;
+    const memory_format_t gOwi16o = mkldnn_gOwi16o;
+    const memory_format_t gOIw8i16o2i = mkldnn_gOIw8i16o2i;
+    const memory_format_t gIOw16o16i = mkldnn_gIOw16o16i;
+    const memory_format_t gOIw8o16i2o = mkldnn_gOIw8o16i2o;
     const memory_format_t goihw = mkldnn_goihw;
     const memory_format_t hwigo = mkldnn_hwigo;
+    const memory_format_t giohw = mkldnn_giohw;
+    const memory_format_t hwigo_s8s8 = mkldnn_hwigo_s8s8;
     const memory_format_t gOIhw8i8o = mkldnn_gOIhw8i8o;
     const memory_format_t gOIhw16i16o = mkldnn_gOIhw16i16o;
     const memory_format_t gOIhw4i16o4i = mkldnn_gOIhw4i16o4i;
+    const memory_format_t gOIhw4i16o4i_s8s8 = mkldnn_gOIhw4i16o4i_s8s8;
     const memory_format_t gOIhw8i16o2i = mkldnn_gOIhw8i16o2i;
+    const memory_format_t gOIdhw8i16o2i = mkldnn_gOIdhw8i16o2i;
     const memory_format_t gOIhw8o16i2o = mkldnn_gOIhw8o16i2o;
     const memory_format_t gOIhw8o8i = mkldnn_gOIhw8o8i;
     const memory_format_t gOIhw16o16i = mkldnn_gOIhw16o16i;
     const memory_format_t gIOhw16o16i = mkldnn_gIOhw16o16i;
-    const memory_format_t gOihw8o = mkldnn_gOihw8o;
     const memory_format_t gOihw16o = mkldnn_gOihw16o;
     const memory_format_t gOhwi8o = mkldnn_gOhwi8o;
     const memory_format_t gOhwi16o = mkldnn_gOhwi16o;
     const memory_format_t Goihw8g = mkldnn_Goihw8g;
     const memory_format_t Goihw16g = mkldnn_Goihw16g;
-    const memory_format_t gOhIw16o4i = mkldnn_gOhIw16o4i;
     const memory_format_t goidhw = mkldnn_goidhw;
+    const memory_format_t gOIdhw8i8o = mkldnn_gOIdhw8i8o;
+    const memory_format_t gOIdhw8o8i = mkldnn_gOIdhw8o8i;
+    const memory_format_t gOdhwi8o = mkldnn_gOdhwi8o;
     const memory_format_t gOIdhw16i16o = mkldnn_gOIdhw16i16o;
     const memory_format_t gOIdhw16o16i = mkldnn_gOIdhw16o16i;
     const memory_format_t gOidhw16o = mkldnn_gOidhw16o;
@@ -197,13 +239,13 @@ namespace primitive_kind {
     const primitive_kind_t sum = mkldnn_sum;
     const primitive_kind_t convolution = mkldnn_convolution;
     const primitive_kind_t deconvolution = mkldnn_deconvolution;
+    const primitive_kind_t shuffle = mkldnn_shuffle;
     const primitive_kind_t eltwise = mkldnn_eltwise;
     const primitive_kind_t softmax = mkldnn_softmax;
     const primitive_kind_t pooling = mkldnn_pooling;
     const primitive_kind_t lrn = mkldnn_lrn;
     const primitive_kind_t batch_normalization = mkldnn_batch_normalization;
     const primitive_kind_t inner_product = mkldnn_inner_product;
-    const primitive_kind_t convolution_relu = mkldnn_convolution_relu;
     const primitive_kind_t rnn = mkldnn_rnn;
 }
 
@@ -223,16 +265,17 @@ namespace query {
     const query_t impl_info_str = mkldnn_query_impl_info_str;
 
     const query_t some_d = mkldnn_query_some_d;
+    const query_t op_d = mkldnn_query_op_d;
     const query_t memory_d = mkldnn_query_memory_d;
     const query_t convolution_d = mkldnn_query_convolution_d;
     const query_t deconvolution_d = mkldnn_query_deconvolution_d;
+    const query_t shuffle_d = mkldnn_query_shuffle_d;
     const query_t eltwise_d = mkldnn_query_eltwise_d;
     const query_t softmax_d = mkldnn_query_softmax_d;
     const query_t pooling_d = mkldnn_query_pooling_d;
     const query_t lrn_d = mkldnn_query_lrn_d;
     const query_t batch_normalization_d = mkldnn_query_batch_normalization_d;
     const query_t inner_product_d = mkldnn_query_inner_product_d;
-    const query_t convolution_relu_d = mkldnn_query_convolution_relu_d;
     const query_t rnn_d = mkldnn_query_rnn_d;
 
     const query_t some_pd = mkldnn_query_some_pd;
@@ -253,13 +296,13 @@ using wino_data_t = mkldnn_wino_desc_t;
 using memory_desc_t = mkldnn_memory_desc_t;
 using convolution_desc_t = mkldnn_convolution_desc_t;
 using deconvolution_desc_t = mkldnn_deconvolution_desc_t;
+using shuffle_desc_t = mkldnn_shuffle_desc_t;
 using pooling_desc_t = mkldnn_pooling_desc_t;
 using eltwise_desc_t = mkldnn_eltwise_desc_t;
 using softmax_desc_t = mkldnn_softmax_desc_t;
 using lrn_desc_t = mkldnn_lrn_desc_t;
 using batch_normalization_desc_t = mkldnn_batch_normalization_desc_t;
 using inner_product_desc_t = mkldnn_inner_product_desc_t;
-using convolution_relu_desc_t = mkldnn_convolution_relu_desc_t;
 
 using rnn_direction_t = mkldnn_rnn_direction_t;
 using rnn_cell_desc_t = mkldnn_rnn_cell_desc_t;
@@ -275,13 +318,14 @@ struct op_desc_t {
         memory_desc_t memory;
         convolution_desc_t convolution;
         deconvolution_desc_t deconvolution;
+        shuffle_desc_t shuffle;
         pooling_desc_t pooling;
         eltwise_desc_t eltwise;
         softmax_desc_t softmax;
         lrn_desc_t lrn;
         batch_normalization_desc_t batch_normalization;
         inner_product_desc_t inner_product;
-        convolution_relu_desc_t convolution_relu;
+        rnn_desc_t rnn;
     };
 
     op_desc_t(const primitive_kind_t &_): kind(_) {}
@@ -295,13 +339,14 @@ struct op_desc_t {
 
     DECL_CTOR_AND_CONVERTERS(memory_desc_t, memory);
     DECL_CTOR_AND_CONVERTERS(convolution_desc_t, convolution);
+    DECL_CTOR_AND_CONVERTERS(shuffle_desc_t, shuffle);
     DECL_CTOR_AND_CONVERTERS(pooling_desc_t, pooling);
     DECL_CTOR_AND_CONVERTERS(eltwise_desc_t, eltwise);
     DECL_CTOR_AND_CONVERTERS(softmax_desc_t, softmax);
     DECL_CTOR_AND_CONVERTERS(lrn_desc_t, lrn);
     DECL_CTOR_AND_CONVERTERS(batch_normalization_desc_t, batch_normalization);
     DECL_CTOR_AND_CONVERTERS(inner_product_desc_t, inner_product);
-    DECL_CTOR_AND_CONVERTERS(convolution_relu_desc_t, convolution_relu);
+    DECL_CTOR_AND_CONVERTERS(rnn_desc_t, rnn);
 
 #   undef DECL_CTOR_AND_CONVERTERS
 };
@@ -328,6 +373,7 @@ struct view_pd_t;
 struct concat_pd_t;
 struct sum_pd_t;
 struct reorder_pd_t;
+struct shuffle_pd_t;
 
 }
 }

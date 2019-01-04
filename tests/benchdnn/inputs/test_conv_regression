@@ -6,9 +6,12 @@
 --dir=FWD_B  --batch=conv_regression_padding
 --dir=BWD_D  --batch=conv_regression_padding
 --dir=BWD_WB --batch=conv_regression_padding
---merge=RELU
+--dir=FWD_B  --batch=conv_regression_gemm
+--dir=BWD_D  --batch=conv_regression_gemm
+--dir=BWD_WB --batch=conv_regression_gemm
+--attr=post_ops='relu'
 --dir=FWD_B --batch=conv_regression_small_spatial
 --dir=FWD_B --batch=conv_regression_padding
 
 #
---batch=conv_regression_general
+--batch=test_conv_regression_general

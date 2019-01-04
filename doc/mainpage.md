@@ -18,15 +18,17 @@ The table below summarizes the list of supported functions and their variants.
 
 | Primitive class   | Primitive                | fp32 training | fp32 inference | int8 inference |
 | :---------------- | :----------------------- | :-----------: | :------------: | :------------: |
-| Convolution       | 2D direct convolution    | x             | x              | x              |
-|                   | 2D direct deconvolution  | x             | x              |                |
+| Convolution       | 1D direct convolution    | x             | x              |                |
+|                   | 2D direct convolution    | x             | x              | x              |
+|                   | 2D direct deconvolution  | x             | x              | x              |
 |                   | 2D winograd convolution  | x             | x              | x              |
 |                   | 3D direct convolution    | x             | x              |                |
 |                   | 3D direct deconvolution  | x             | x              |                |
-| Inner Product     | 2D inner product         | x             | x              |                |
+| Inner Product     | 2D inner product         | x             | x              | x              |
 |                   | 3D inner product         | x             | x              |                |
 | RNN (experimental)| Vanilla RNN cell         | x             | x              |                |
 |                   | LSTM cell                | x             | x              |                |
+|                   | GRU cell                 | x             | x              |                |
 | Pooling           | 2D maximum pooling       | x             | x              | x              |
 |                   | 2D average pooling       | x             | x              | x              |
 |                   | 3D maximum pooling       | x             | x              |                |
@@ -41,11 +43,12 @@ The table below summarizes the list of supported functions and their variants.
 |                   | Bounded ReLU             |               | x              |                |
 |                   | Soft ReLU                |               | x              |                |
 |                   | Logistic regression      |               | x              |                |
-|                   | Softmax                  |               | x              |                |
+|                   | Softmax                  | x             | x              |                |
 | Data manipulation | Reorder/quantization     | x             | x              | x              |
 |                   | Sum                      | x             | x              | x              |
 |                   | Concat                   | x             | x              | x              |
 |                   | Elementwise operations   |               | x              |                |
+|                   | Channel Shuffle          | x             | x              | x              |
 
 ## Programming Model
 
@@ -112,7 +115,7 @@ To create an operation primitive:
 
 1. Create a logical description of the operation. For example, the description
    of a convolution operation contains parameters such as sizes, strides, and
-   propagation type. It also contains the input and outpumemory descriptors.
+   propagation type. It also contains the input and output memory descriptors.
 2. Create a primitive descriptor by attaching the target engine to the logical
    description.
 3. Create an instance of the primitive and specify the input and output
@@ -140,12 +143,16 @@ The following examples are available in the /examples directory and provide more
 * Creation of forward propagation of GNMT topology (experimental support)
     - C++: simple_rnn.cpp
 
+* Training RNN with sequences of variable length
+    - C++: simple_rnn_training.cpp
+
 ### Performance Considerations
 
 *  Convolution and inner product primitives choose the memory format when you create them with the unspecified memory
    format `any` for input or output.
    The memory format chosen is based on different circumstances such as hardware and
    convolutional parameters.
+*  Convolution could be executed using the [Winograd algorithm](@ref winograd_convolution) for a significant performance boost.
 *  Operation primitives (such as ReLU, LRN, or pooling) following convolution or
    inner product, should have input in the same memory format as the
    convolution or inner-product. Reordering can be an expensive
@@ -155,6 +162,7 @@ The following examples are available in the /examples directory and provide more
 *  An operation primitive (typically operations such as pooling, LRN, or softmax)
    might need workspace memory for storing results of intermediate operations
    that help with backward propagation.
+
 
 The following link provides a guide to MKLDNN verbose mode for profiling execution:
 
@@ -173,10 +181,11 @@ The following link provides a guide to MKLDNN verbose mode for profiling executi
    tells the backward operation what exact implementation is chosen for
    the primitive on forward propagation. This in turn helps the backward operation
    to decode the workspace memory correctly.
-*  You should always check the correspondance between current data format and
+*  You should always check the correspondence between current data format and
    the format that is required by a primitive. For instance, forward convolution
    and backward convolution with respect to source might choose different memory
-   formats for weights (if created with `any`). In this case, you should create a reorder primitive for weights. 
+   formats for weights (if created with `any`). In this case, you should create
+   a reorder primitive for weights.
    Similarly, a reorder primitive might be required for a source data between
    forward convolution and backward convolution with respect to weights.
 
@@ -188,6 +197,16 @@ The following link provides a guide to MKLDNN verbose mode for profiling executi
   structure specifies which output of the primitive to use as an input for
   another primitive. For a memory primitive the index is always `0`
   because it does not have a output.
+
+
+## Architecture and design of Intel MKL-DNN
+
+For better understanding the architecture and design of Intel MKL-DNN
+as well as the concepts used in the library please read the following
+topics:
+
+[Understanding Memory Formats](@ref understanding_memory_formats)
+
 
 --------
 

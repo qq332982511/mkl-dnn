@@ -38,6 +38,7 @@
 #define FMT_WEIGHTS_BLOCKED16 OIhw4i16o4i
 #define FMT_WEIGHTS_BLOCKED16_G gOIhw4i16o4i
 #endif
+#define FMT_WEIGHTS_BLOCKED16_IOhw16o16i FMT_WEIGHTS_BLOCKED16
 #define TEST_CASE_NAME_PREFIX Forward
 #elif defined DIRECTION_BACKWARD_DATA
 #define FMT_WEIGHTS_BLOCKED OIhw8o8i
@@ -50,6 +51,8 @@
 #elif defined(S16S16S32)
 #define FMT_WEIGHTS_BLOCKED16 OIhw8o16i2o
 #define FMT_WEIGHTS_BLOCKED16_G gOIhw8o16i2o
+#define FMT_WEIGHTS_BLOCKED16_IOhw16o16i FMT_WEIGHTS_BLOCKED16
+#define FMT_WEIGHTS_BLOCKED16_G_IOhw16o16i FMT_WEIGHTS_BLOCKED16_G
 #endif
 #define TEST_CASE_NAME_PREFIX BackwardData
 #elif defined DIRECTION_BACKWARD_WEIGHTS
@@ -57,6 +60,8 @@
 #define FMT_WEIGHTS_BLOCKED_G gOIhw8i8o
 #define FMT_WEIGHTS_BLOCKED16 OIhw16i16o
 #define FMT_WEIGHTS_BLOCKED16_G gOIhw16i16o
+#define FMT_WEIGHTS_BLOCKED16_IOhw16o16i FMT_WEIGHTS_BLOCKED16
+#define FMT_WEIGHTS_BLOCKED16_G_IOhw16o16i FMT_WEIGHTS_BLOCKED16_G
 #define TEST_CASE_NAME_PREFIX BackwardWeights
 #endif
 
@@ -73,27 +78,18 @@
 #define INST_TEST_CASE(str, ...) INST_TEST_CASE_( \
         CONCAT_WITH_UNDERSCORE(TEST_CASE_NAME_PREFIX, str), __VA_ARGS__)
 
-#ifndef NEGATIVE_SLOPE
-#define NEGATIVE_SLOPE 0.0f
-#else
-#undef INST_TEST_CASE
-#define INST_TEST_CASE(str, ...) INST_TEST_CASE_( \
-        CONCAT_WITH_UNDERSCORE(CONCAT_WITH_UNDERSCORE(TEST_CASE_NAME_PREFIX, \
-        str), neg_slope),  __VA_ARGS__)
-#endif
-
 #define PARAMS(src, weights, bias, dst, ...) \
-    test_convolution_params_t { ENGINE, ALGORITHM, NEGATIVE_SLOPE, \
+    test_convolution_params_t { ENGINE, ALGORITHM, \
     EXPAND_FORMATS(src, weights, bias, dst), /* empty attributes */ {}, \
     {__VA_ARGS__} }
 
 #define PARAMS_EXPECT_FAIL(src, weights, bias, dst, code, ...) \
-    test_convolution_params_t { ENGINE, ALGORITHM, NEGATIVE_SLOPE, \
+    test_convolution_params_t { ENGINE, ALGORITHM, \
     EXPAND_FORMATS(src, weights, bias, dst), /* empty attributes */ {}, \
     {__VA_ARGS__}, true, code }
 
 #define PARAMS_ATTR(src, weights, bias, dst, round_mode, scale, policy, ...) \
-    test_convolution_params_t { ENGINE, ALGORITHM, NEGATIVE_SLOPE, \
+    test_convolution_params_t { ENGINE, ALGORITHM, \
     EXPAND_FORMATS(src, weights, bias, dst), \
     {mkldnn::round_mode, scale, test_convolution_attr_t::scale_t::policy}, \
     {__VA_ARGS__} }

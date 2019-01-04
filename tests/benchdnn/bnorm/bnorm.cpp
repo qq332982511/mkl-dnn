@@ -22,6 +22,8 @@
 
 #include "mkldnn.h"
 
+#include "src/common/mkldnn_thread.hpp"
+
 #include "mkldnn_common.hpp"
 #include "mkldnn_memory.hpp"
 #include "norm.hpp"
@@ -76,8 +78,7 @@ static int prepare_fwd(const prb_t *p, dnn_mem_t &src, dnn_mem_t &mean,
     print(6, "check_alg: %s, density = %g, flex_bits = %d\n",
             check_alg2str(alg), density, flex_bits);
 
-#   pragma omp parallel for
-    for (int c = 0; c < p->ic; ++c) {
+    mkldnn::impl::parallel_nd(p->ic, [&](int c) {
         const float m = ((float *)mean)[c] =
             alg == ALG_0 ? 0.f : 0.25f * (1 << (c % 7));
         float v = 0; /* current variance */
@@ -119,7 +120,7 @@ static int prepare_fwd(const prb_t *p, dnn_mem_t &src, dnn_mem_t &mean,
             ((float *)ss)[c] = 1;
             ((float *)ss)[p->ic + c] = 0;
         }
-    }
+    });
 
     return OK;
 }
@@ -180,8 +181,7 @@ static int prepare_bwd(const prb_t *p, dnn_mem_t &src, dnn_mem_t &d_dst,
     print(5, "prep_bwd: k:%d, P:%d log2P:%d, density = %g\n",
             k, P, log2P, density);
 
-#   pragma omp parallel for
-    for (int c = 0; c < p->ic; ++c) {
+    mkldnn::impl::parallel_nd(p->ic, [&](int c) {
         const float m = ((float *)mean)[c] = c % 2;
 
         /* var + eps \in {1/4, 1, 4} */
@@ -272,7 +272,7 @@ static int prepare_bwd(const prb_t *p, dnn_mem_t &src, dnn_mem_t &d_dst,
             ((float *)ss)[c] = 1;
             ((float *)ss)[p->ic + c] = 0;
         }
-    }
+    });
 
     return OK;
 }
@@ -375,11 +375,15 @@ int check_fwd_ws(const dnn_mem_t &data_dt, const dnn_mem_t &ws_dt, res_t *r) {
     const float *d = (const float *)data_dt;
     const uint8_t *ws = (const uint8_t *)ws_dt;
 
-    /* some internal knowledge: either ws element is byte-width (e.g. for ref
-     * implementation) or bit-width (for jitted one) */
+    /* some internal knowledge: flags in ws are either stored as bytes (e.g.
+     * for the ref implementation) or as bits (e.g. for the jitted one); in
+     * the first case the ws memory has fewer elements than the data memory */
     enum { ws_byte, ws_bit } ws_type;
-    ws_type = ws_dt.size() <= nelems ? ws_bit : ws_byte;
+    ws_type = ws_dt.nelems() < nelems ? ws_bit : ws_byte;
 
+    /* more internal knowledge: data_dt and ws_dt are expected to have exactly
+     * the same data layout, and data_dt padded regions are expected to be
+     * zero, and the respective ws_dt elements should be set accordingly */
     for (size_t i = 0; i < nelems; i += 8) {
         for (size_t j = 0; j < MIN2(8, nelems - i); ++j) {
             const bool want = *d > 0;
@@ -506,8 +510,8 @@ static int cvt_mask_to_ws(const prb_t *p, const dnn_mem_t &mask_fp,
     DNN_SAFE(mkldnn_primitive_create(&b, bpd, inputs, outputs), WARN);
     SAFE(execute(b), WARN);
 
-    mkldnn_primitive_desc_destroy(bpd);
-    mkldnn_primitive_destroy(b);
+    DNN_SAFE(mkldnn_primitive_desc_destroy(bpd), CRIT);
+    DNN_SAFE(mkldnn_primitive_destroy(b), CRIT);
 
     return OK;
 }
@@ -563,7 +567,7 @@ int doit(const prb_t *p, res_t *r) {
             return r->state = MISTRUSTED, OK;
 
         mkldnn_primitive_at_t inputs[4];
-        const_mkldnn_primitive_t outputs[3];
+        const_mkldnn_primitive_t outputs[4];
 
         int idx = 0;
 
@@ -599,10 +603,9 @@ int doit(const prb_t *p, res_t *r) {
                 SAFE(compare(p, MEAN, mean_fp, mean_dt, r), WARN);
                 SAFE(compare(p, VAR, var_fp, var_dt, r), WARN);
             }
-            dnn_mem_t data(data_dt.md_, fp, src_format);
-            SAFE(data.reorder(data_dt), WARN);
+            dnn_mem_t data(data_dt, fp, src_format);
             SAFE(compare(p, DATA, data_fp, data, r), WARN);
-            if (p->flags & FUSE_BN_RELU)
+            if ((p->flags & FUSE_BN_RELU) && !(p->dir & FLAG_INF))
                 SAFE(check_fwd_ws(data_dt, ws_dt, r), WARN);
         }
     } else {
@@ -648,9 +651,8 @@ int doit(const prb_t *p, res_t *r) {
                     ws_fp, d_data_fp, d_ss_fp);
             if ((p->flags & USE_SCALESHIFT) && (p->dir & FLAG_WEI))
                 SAFE(compare(p, SS, d_ss_fp, d_ss_dt, r), WARN);
-            dnn_mem_t d_data(d_data_dt.md_, fp,
+            dnn_mem_t d_data(d_data_dt, fp,
             is_bnorm_3d(p) ? mkldnn_ncdhw : mkldnn_nchw);
-            SAFE(d_data.reorder(d_data_dt), WARN);
             SAFE(compare(p, DATA, d_data_fp, d_data, r), WARN);
         }
     }
@@ -671,6 +673,8 @@ int doit(const prb_t *p, res_t *r) {
     }
 
     delete p_ws_dt;
+    DNN_SAFE(mkldnn_primitive_desc_destroy(bpd), CRIT);
+    DNN_SAFE(mkldnn_primitive_destroy(b), CRIT);
 
     return OK;
 }
